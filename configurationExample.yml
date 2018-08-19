@@ -1,0 +1,94 @@
+# this configuration file maps sensors to fans
+# TODO:
+# pwm upper, lower bound
+# triggers for modes?
+# default polling time is once per second
+# default controlDelay is 5 seconds
+# default averaging time is 5 seconds
+settings:
+  controlDelay: 5s
+  averagintTime: 5s
+  pollingTime: 1s
+sensors:
+- name: cpu
+  device: /sys/class/hwmon0/temp1
+  divider: 10000
+- name: mainboard
+  device: /sys/class/hwmon2/device/temp1
+  crit: 40
+  beep: 1
+- name: southbridge
+  device: /sys/class/hwmon2/device/temp2
+- name: temp3
+  device: /sys/class/hwmon2/device/temp3
+  crit: 80
+  max: 60
+  crit_beep: 1
+- name: hdd1
+  device: /dev/sda
+  smart: yes
+  tempId: 194
+  divider: 1
+  lowerBound: 30
+  upperBound: 40
+- name: hdd2
+  device: /dev/sdb
+  smart: yes
+  lowerBound: 30
+  upperBound: 40
+- name: hdd3
+  device: /dev/sdc
+  smart: yes
+  lowerBound: 30
+  upperBound: 40
+- name: hdd4
+  device: /dev/sdd
+  smart: yes
+  lowerBound: 30
+  upperBound: 40
+- name: hdd5
+  device: /dev/sde
+  smart: yes
+  lowerBound: 30
+  upperBound: 40
+fans:
+- name: cpuFan
+  device: /sys/class/hwmon2/device/pwm1
+- name: front
+  device: /sys/class/hwmon2/device/pwm2
+- name: top
+  device: /sys/class/hwmon2/device/pwm3
+controllers:
+- name: topController
+  inputs:
+  - name: cpu
+    weight: 5
+  outputs:
+  - name: cpuFan
+    weight: 20
+    curve:
+    - name: point1
+      temp: 50
+      pwm: 70
+    - point2
+    - point3
+- name: frontController
+  inputs:
+  - name: hdd1
+    weight: 5
+  - name: hdd2
+    weight: 5
+  - name: hdd3
+    weight: 5
+  - name: hdd4
+  - name: hdd5
+  outputs:
+    - name: front
+#- fans:
+#  - name: top
+#    device: /sys/class/hwmon2/device/pwm2
+#    enable: 2
+#    auto_channels_temp: 3
+#    auto_point1_pwm: 50
+
+
