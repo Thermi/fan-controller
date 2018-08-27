@@ -8,11 +8,12 @@
 settings:
   controlDelay: 5s
   averagintTime: 5s
-  pollingTime: 1s
+  pollingTime: 5s
 sensors:
 - name: cpu
   device: /sys/class/hwmon/hwmon0/temp1
   divisor: 1000
+  crit: 90
 - name: mainboard
   device: /sys/class/hwmon/hwmon2/device/temp1
   crit: 40
@@ -83,7 +84,6 @@ controllers:
   - name: hdd3
     weight: 5
   - name: hdd4
-  - name: hdd5
   outputs:
     - name: front
 #- fans:

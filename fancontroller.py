@@ -1,6 +1,7 @@
 #! /usr/bin/python3 -B
 
 import argparse
+import durations
 import logging
 import os
 import platform
@@ -74,22 +75,6 @@ class FanController():
 						self.__notificationObject.notify_all()
 						self.__notificationObject.release()
 
-	class ControlledSensor():
-		def __init__(self, sensor, weight):
-			self.__sensor = sensor
-			self.__weight = weight
-
-		def getName(self):
-			return self.__sensor.getName()
-
-		def getWeight(self):
-			return self.__weight
-
-		def getTemperature(self):
-			return self.__sensor.getTemperature()
-
-		def isCritical(self):
-			return self.__sensor.isCritical()
 
 	class Fan():
 		def __init__(self, device, name = None, pwm = False, enable = 1, loudThreshold = 180, maxRot = 1500, minPwm = 80):
@@ -122,7 +107,7 @@ class FanController():
 			return self.__isPwm
 
 		def setPwm(self, pwm):
-			self.__logging.info("Setting pwm value {} on {}".format(pwm, self.__generateControlFilePath()))
+			self.__logging.debug("Setting pwm value {} on {}".format(pwm, self.__generateControlFilePath()))
 			with open(self.__generateControlFilePath(), "w") as f:
 				f.write(str(pwm))
 
@@ -156,7 +141,7 @@ class FanController():
 			return fanRotStream.readline()
 		
 		def setRot(self, rot):
-			self.__logging.info("Setting rot value {} on {}".format(rot, self.getName()))
+			self.__logging.debug("Setting rot value {} on {}".format(rot, self.getName()))
 			with open(self.__generateControlFilePath(), "w") as f:
 				f.write(rot)
 
@@ -203,6 +188,12 @@ class FanController():
 		def getName(self):
 			return self.__name
 
+		def getMinRot(self):
+			return self.__minRot
+
+		def getMaxRot(self):
+			return self.__maxRot
+
 	class TemperatureSensor():
 		def __init__(self, device, divisor = 10000, name = None, beep = False, crit_beep = False, crit = 90, smart = False, tempId = 194,
 			min = 20, max = 40, logLevel=logging.INFO):
@@ -235,20 +226,20 @@ class FanController():
 		def isCritical(self):
 			temp = self.getTemperature()
 			if temp != None:
-				return temp > self.getCrit() 
+				return temp > self.getCriticalTemperature() 
 			return True
 			
-		def getCrit(self):
+		def getCriticalTemperature(self):
 			with open(self.__generateSensorPath() + "_crit") as f:
 				return int(f.readline(), 10)/self.__divisor
 
 		def getTemperature(self):
+			self.__logging.info("Getting temperature from {}".format(self.getName()))
 			if self.__smart:
 				"""
 				block device has to be smart capable and able to return temperature
 				returns temperature in degrees celsius (°C) or None, if it failed
 				"""
-				self.__logging.info("Getting temperature from {}".format(self.getName()))
 				try:
 					proc = subprocess.run(["/usr/bin/smartctl" , "-a", "{}".format(self.__device)], stdout=subprocess.PIPE)
 					lines = proc.stdout.splitlines()
@@ -290,7 +281,43 @@ class FanController():
 			return self.__lowerTemperatureBound
 
 		def getName(self):
+
 			return self.__name
+
+	# completely wrap the temperature Sensor (FanController.TemperatueSensor class)
+	# and add the getWeight() method
+	class ControlledSensor(TemperatureSensor):
+		def __init__(self, sensor, weight):
+#			self.__class__ = type(sensor.__class__.__name__,
+#				(self.__class__, sensor.__class__),
+#				{})
+			self.__dict__ = sensor.__dict__
+			self.__weight = weight
+
+		def getWeight(self):
+			return self.__weight
+
+	class ControlledFan(Fan):
+		def __init__(self, fan, points):
+#			self.__class__ = type(fan.__class__.__name__,
+#				(self.__class__, fan.__class__),
+#				{})
+			self.__dict__ = fan.__dict__
+			self.__points = points
+
+		def getPoints(self):
+			return self.__points
+
+	class CurvePoint():
+		def __init__(self, temp, pwm):
+			self.__temp = temp
+			self.__pwm = pwm
+
+		def getPwm(self):
+			return self.__pwm
+
+		def getTemp(self):
+			return self.__temp
 
 	class Controller():
 		"""
@@ -320,8 +347,8 @@ class FanController():
 				raise ValueError("One or more sensors are not of the correct type.")
 			success = True
 			for fan in outputs:
-				if type(fan) != FanController.Fan:
-					self.__logging.error("Output {} has to be of type Fan.")
+				if type(fan) not in (FanController.Fan, FanController.ControlledFan):
+					self.__logging.error("Output {} has to be of type Fan.".format(fan))
 					sucess = False
 				else:
 					self.__outputs[fan.getName()] = fan
@@ -333,32 +360,46 @@ class FanController():
 		def iterate(self):
 			try:
 				self.__ringBuffer += self.getWeightedTemperature()
-
-				for sensorname, sensor in self.__inputs.items():
+				for sensorName, sensor in self.__inputs.items():
 					if sensor.isCritical():
+						self.__logging.warn("Sensor {} is critical at {}".format(sensorName, sensor.getTemperature()))
 						self.__setMaximum()
 						return
 				self.actOnTempChanged()
 			except:
 				pass
 
+		def __setMaximum(self):
+			for fan in self.__outputs.values():
+				if fan.isPwm():
+					fan.setPwm(255)
+				else:
+					fan.setRot(fan.getMaxRot())
+
 		def __increaseFanSpeed(self, value=5):
 			# increase the speed of all fans by value percent (if not pwm) or value/255 (if it is pwm).
 			for name, fan in self.__outputs.items():
-				if fan.isPwm():
-					pwmValue = fan.getPwm()
-					newValue = pwmValue + value
-					if newValue > 255:
-						fan.setPwm(255)
-					else:
-						fan.setPwm(newValue)
+				if type(fan) == FanController.ControlledSensor:
+					self.followCurve(fan)
 				else:
-					rotValue = fan.getRot()
-					newValue = rotValue + fan.getMaxRot()*0.05
-					if newValue > fan.getMaxRot():
-						fan.setRot(fan.getMaxRot())
+					if fan.isPwm():
+						pwmValue = fan.getPwm()
+						newValue = pwmValue + value
+						if newValue > 255:
+							self.__logging.debug("Setting pwm value {} on {}".format(255, fan.getName()))
+							fan.setPwm(255)
+						else:
+							self.__logging.debug("Setting pwm value {} on {}".format(newValue, fan.getName()))
+							fan.setPwm(newValue)
 					else:
-						fan.setRot(newValue)
+						rotValue = fan.getRot()
+						newValue = rotValue + fan.getMaxRot()*0.05
+						if newValue > fan.getMaxRot():
+							self.__logging.debug("Setting pwm value {} on {}".format(fan.getMaxRot(), fan.getName()))
+							fan.setRot(fan.getMaxRot())
+						else:
+							self.__logging.debug("Setting pwm value {} on {}".format(newValue, fan.getName()))						
+							fan.setRot(newValue)
 
 		def __decreaseFanSpeed(self, value=5):
 			# increase the speed of all fans by value percent (if not pwm) or value/255 (if it is pwm).
@@ -368,15 +409,19 @@ class FanController():
 					newValue = pwmValue - value
 					if newValue < fan.getMinPwm():
 						newPwm = fan.getMinPwm()
+						self.__logging.debug("Setting pwm value {} on {}".format(newPwm, fan.getName()))
 						fan.setPwm(fan.getMinPwm())
 					else:
+						self.__logging.debug("Setting pwm value {} on {}".format(newValue, fan.getName()))
 						fan.setPwm(newValue)
 				else:
 					rotValue = fan.getRot()
 					newValue = rotValue - fan.getMaxRot()*0.05
 					if newValue < fan.getMinRot():
+						self.__logging.debug("Setting rot value {} on {}".format(newValue, fan.getName()))
 						fan.setRot(fan.getMinRot())
 					else:
+						self.__logging.debug("Setting rot value {} on {}".format(newValue, fan.getName()))
 						fan.setRot(newValue)
 
 		def __getLastEffectiveTemperatureChange(self):
@@ -413,11 +458,13 @@ class FanController():
 			for inputDevice in self.__inputs.values():
 				weight = inputDevice.getWeight()
 				temp = inputDevice.getTemperature()
-				self.__logging.info("Calculating with temp {} and weight {}".format(temp, weight))
+				self.__logging.debug("Calculating with temp {} and weight {}".format(temp, weight))
 				if temp != None:
 					sumOfWeights += weight
 					sumOfTemps += temp*weight
-			return sumOfTemps/sumOfWeights
+				result = sumOfTemps/sumOfWeights
+				self.__logging.debug("Calculated weighted temperature of {}".format(result))
+			return result
 
 		def anyInputCritical(self):
 			for inputDevice in self.__inputs.values():
@@ -425,13 +472,9 @@ class FanController():
 					return True
 			return False
 
-		def scaleOutputs(self):
-			scalePart = 0
-			#  TODO: scale output corresponding to the weighted temperature
-
-		def setFans(self, scale):
-			for output in self.__outputs:
-				output.setScaledOutput(scale)
+		def setPwm(self, pwm):
+			for fan in self.__outputs.values():
+				fans.setPwm(pwm)
 
 		def detectMaxRots(self):
 			def checkRot(fan, counterObject):
@@ -447,11 +490,42 @@ class FanController():
 			notifier.wait()
 			notifier.release()
 
-
-
 		def getName(self):
 			return self.__name
 
+		def followCurve(self, fan):
+			def scale(temp, thisPoint, nextPoint):
+				thisPointTemp = thisPoint.getTemp()
+				thisPointPwm = thisPoint.getPwm()
+				tempScale = (nextPoint.getTemp() - thisPointTemp)/(thisPointTemp-temp)
+				pwm = (thisPointPwm - nextPoint.getPwm())*tempScale + thisPointPwm
+				return pwm
+
+			# follow the curve points and scale the outputs correspondingly
+			temp = self.getWeightedTemperature()
+			# figure out between which points this is 
+			points = fan.getPoints()
+			pointLen = len(points)
+			for index in range(0, pointLen-2):
+				thisPoint = points[index]
+				nextPoint = points[index+1]
+				if temp > thisPoint.getTemp() and temp < nextPoint.getTemp():
+					# the temperature is between the two curve points, now scale the pwm output according to the temperature
+					fan.setPwm(scale(temp, thisPoint, nextPoint))
+					return
+			# get the last point, then scale to pwm value 255 with far temp point being the lowest critical temperature of all sensors
+			lastPoint = points[-1]
+			# get the lowest critical temperature 
+			# initialize it with the maximum word size (highest value an integer in Python 3 can hold)
+			lowestCrit = sys.maxsize
+			for sensor in self.__inputs:
+				criticalTemperature = sensor.getCriticalTemperature()
+				if criticalTemperature < lowestCrit:
+					lowestCrit = criticalTemperature
+
+			pseudoPoint = Controller.CurvePoint(lowestCrit, 255)
+			fan.setPwm(scale(temp, lastPoint, pseudoPoint))
+			return 
 
 	class Main():
 		class Waker():
@@ -491,11 +565,22 @@ class FanController():
 
 
 		def __configureSettings(self, settings):
-			return {
+			newSettings = {
 				"controlDelay" : 5,
 				"averagintTime" : 5,
 				"pollingTime" : 1
 			}
+			for key, value in settings.items():
+				asTime = False
+				for substring in ["delay", "time"]:
+					if substring in key.lower():
+						asTime = True
+						# parse as duration, then transform to durations
+						newSettings[key] = durations.Duration(str(value)).to_seconds()
+						break
+				if not asTime:
+					newSettings[key] = value
+			return newSettings
 
 
 		def __configureSensors(self, sensors):
@@ -580,7 +665,15 @@ class FanController():
 							if configuredFan == None:
 								self.__logging.error("The input {} is used, but not defined.".format(fan["name"]))
 							else:
-								kwargs["outputs"].append(configuredFan)
+								if "curve" in fan:
+									points = []
+									for point in fan["curve"]:
+										points.append(FanController.CurvePoint(point["temp"], point["pwm"]))
+									# order by temp
+									points.sort(key=lambda point: point.getTemp())
+									kwargs["outputs"].append(FanController.ControlledFan(configuredFan, points))
+								else:
+									kwargs["outputs"].append(configuredFan)
 					elif key == "name":
 						kwargs[key] = value
 				newController = FanController.Controller(**kwargs)
@@ -598,12 +691,19 @@ class FanController():
 			counter.decrease()
 
 		def __runAllControllers(self):
+			self.__logging.debug("Running all controllers")
 			counter = FanController.CounterWithNotifier(self.__endOfLoopWaiterObject, len(self.__controllers))
 			for controllerName, controller in self.__controllers.items():
 				newThread = threading.Thread(target=self.__runOneController, args=(counter, controller))
 				newThread.start()
+				self.__logging.debug("Started thread for {}".format(controllerName))
 				self.__threads[newThread.ident] = newThread
 
+		def __filterRunningThreads(self):
+			self.__threads.clear()
+			for thread in threading.enumerate():
+				self.__threads[thread.ident] = thread
+			
 		def busyLoop(self):
 			self.__logging.debug("Entered busyLoop method.")
 			pollingObject = select.poll()
@@ -621,14 +721,19 @@ class FanController():
 					if fd in wakerThreadSockets:
 						self.__logging.debug("Got message from waker thread.")
 						if flags & select.POLLIN:
-							self.__logging.info("Got pollin for wakerThreadSocket {}".format(fd))
+							self.__logging.debug("Got pollin for wakerThreadSocket {}".format(fd))
 							self.__runAllControllers()
 							localSocket.recvmsg(9000)
 				self.__logging.debug("End of an iteration of the busyLoop")
 				self.__endOfLoopWaiterObject.acquire()
 				self.__endOfLoopWaiterObject.wait()
+				self.__endOfLoopWaiterObject.release()
+				self.__logging.debug("Synchronized threads")
+				self.__filterRunningThreads()
 
-
+			for thread in self.__threads.value():
+				self.__threads.pop(thread.ident)
+				del(thread)
 
 		def run(self):
 			self.__logging.debug("Entered Main.run.")
