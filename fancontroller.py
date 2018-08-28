@@ -234,7 +234,7 @@ class FanController():
 				return int(f.readline(), 10)/self.__divisor
 
 		def getTemperature(self):
-			self.__logging.info("Getting temperature from {}".format(self.getName()))
+			self.__logging.debug("Getting temperature from {}".format(self.getName()))
 			if self.__smart:
 				"""
 				block device has to be smart capable and able to return temperature
@@ -379,12 +379,13 @@ class FanController():
 		def __increaseFanSpeed(self, value=5):
 			# increase the speed of all fans by value percent (if not pwm) or value/255 (if it is pwm).
 			for name, fan in self.__outputs.items():
-				if type(fan) == FanController.ControlledSensor:
+				if type(fan) == FanController.ControlledFan:
+					self.__logging.info("Following curve for {}".format(name))
 					self.followCurve(fan)
 				else:
 					if fan.isPwm():
 						pwmValue = fan.getPwm()
-						newValue = pwmValue + value
+						newValue = int(pwmValue + value)
 						if newValue > 255:
 							self.__logging.debug("Setting pwm value {} on {}".format(255, fan.getName()))
 							fan.setPwm(255)
@@ -393,7 +394,7 @@ class FanController():
 							fan.setPwm(newValue)
 					else:
 						rotValue = fan.getRot()
-						newValue = rotValue + fan.getMaxRot()*0.05
+						newValue = int(rotValue + fan.getMaxRot()*0.05)
 						if newValue > fan.getMaxRot():
 							self.__logging.debug("Setting pwm value {} on {}".format(fan.getMaxRot(), fan.getName()))
 							fan.setRot(fan.getMaxRot())
@@ -499,7 +500,7 @@ class FanController():
 				thisPointPwm = thisPoint.getPwm()
 				tempScale = (nextPoint.getTemp() - thisPointTemp)/(thisPointTemp-temp)
 				pwm = (thisPointPwm - nextPoint.getPwm())*tempScale + thisPointPwm
-				return pwm
+				return int(pwm)
 
 			# follow the curve points and scale the outputs correspondingly
 			temp = self.getWeightedTemperature()
@@ -518,12 +519,12 @@ class FanController():
 			# get the lowest critical temperature 
 			# initialize it with the maximum word size (highest value an integer in Python 3 can hold)
 			lowestCrit = sys.maxsize
-			for sensor in self.__inputs:
+			for sensor in self.__inputs.values():
 				criticalTemperature = sensor.getCriticalTemperature()
 				if criticalTemperature < lowestCrit:
 					lowestCrit = criticalTemperature
 
-			pseudoPoint = Controller.CurvePoint(lowestCrit, 255)
+			pseudoPoint = FanController.CurvePoint(lowestCrit, 255)
 			fan.setPwm(scale(temp, lastPoint, pseudoPoint))
 			return 
 
@@ -581,7 +582,6 @@ class FanController():
 				if not asTime:
 					newSettings[key] = value
 			return newSettings
-
 
 		def __configureSensors(self, sensors):
 			configuredSensors = {}

@@ -6,8 +6,8 @@
 # default controlDelay is 5 seconds
 # default averaging time is 5 seconds
 settings:
-  controlDelay: 5s
-  averagintTime: 5s
+  controlDelay: 2s
+  averagintTime: 2s
   pollingTime: 5s
 sensors:
 - name: cpu
@@ -65,16 +65,14 @@ controllers:
   outputs:
   - name: cpuFan
     curve:
-    - name: point1
-      temp: 50
+    - temp: 50
       pwm: 70
-    - name: point2
-      temp: 70
+    - temp: 70
       pwm: 120
-    - name: point3
-      temp: 86
+    - temp: 86
       pwm: 255
-
+  - name: top
+  
 - name: frontController
   inputs:
   - name: hdd1
@@ -86,6 +84,13 @@ controllers:
   - name: hdd4
   outputs:
     - name: front
+      curve:
+      - temp: 20
+        pwm: 80
+      - temp: 30
+        pwm: 120
+      - temp: 40
+        pwm: 255
 #- fans:
 #  - name: top
 #    device: /sys/class/hwmon2/device/pwm2
